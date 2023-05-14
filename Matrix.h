@@ -8,17 +8,15 @@
 
 //__device__ double bufferMatrix[10000][10000];
 
-
-__global__ void setValue(double** setting, double* setter, int* i) {
-	setting[*i] = setter;
-}
-
-__global__ void device_sumStrings(double* sum, double* summand, double k) {
-	sum[threadIdx.x] += (summand[threadIdx.x] * k);
+__global__ void device_prepare_flags(bool* flags, int size) {
+	int index = blockIdx.x * blockDim.x + threadIdx.x;
+	if (index < size) {
+		flags[index] = false;
+	}
 }
 
 __global__ void device_subMatrixTriangulationStep(double* m, double* stringkoefs, int startpos, int size, bool* flags) {
-	//__shared__ double k;
+
 	
 	int index = blockIdx.x * blockDim.x + threadIdx.x;
 	int stringIndex = index / size;
@@ -26,12 +24,9 @@ __global__ void device_subMatrixTriangulationStep(double* m, double* stringkoefs
 	if (stringIndex > startpos && inStringIndex >= startpos && stringIndex < size && inStringIndex < size) {
 		if (inStringIndex == startpos) {
 			stringkoefs[stringIndex] = m[stringIndex * size+inStringIndex] / m[size*startpos + startpos];
-			//printf("%f %f %d\n", m[stringIndex * size + inStringIndex] / m[size * startpos + startpos], stringkoefs[stringIndex], stringIndex);
 			m[stringIndex * size + inStringIndex] = 0;
 			flags[stringIndex] = true;
 		}
-
-		//__threadfence();
 
 		if (inStringIndex == startpos) return;
 
@@ -39,51 +34,19 @@ __global__ void device_subMatrixTriangulationStep(double* m, double* stringkoefs
 		while (flags[stringIndex] == false);
 
 		m[index] -= (m[size*startpos + inStringIndex] * stringkoefs[stringIndex]);
-			//printf("NATIVE: %f %f %d\n", m[stringIndex * size + inStringIndex] / m[size * startpos + startpos], stringkoefs[stringIndex], stringIndex);;
 	}
-	/*
-	* 
-	if (stringIndex > 0 && stringIndex >= startpos && stringIndex<size && inStringIndex<size && inStringIndex >= startpos) {
-		if (inStringIndex == startpos) {
-			stringkoefs[stringIndex] = m[stringIndex * size] / m[(stringIndex - 1) * size];
-			__syncthreads();
-			m[inStringIndex] = 0;
-		}
-		else {
-			m[stringIndex * size + inStringIndex] -= (m[(stringIndex - 1) * size + inStringIndex] * stringkoefs[stringIndex]);
-		}
-	}*/
-	
-	/*
-	int StringNumber = size * (startpos + blockIdx.x + 1) + (startpos);
-	if (threadIdx.x == 0) {
-		k = m[size * (startpos + blockIdx.x + 1) + (startpos)] / m[size * startpos + startpos];
-		m[size * (startpos + blockIdx.x + 1) + (startpos)] = 0;
-	}
-
-	if (threadIdx.x != 0) {
-		m[size * (startpos + blockIdx.x + 1) + (startpos + threadIdx.x)] -= (m[size * startpos + startpos + threadIdx.x] * k);
-	}*/
 }
 
-__global__ void device_swap_strings(double* bufferMatrix, int a, int b, int size) {
-	double* temp = new double[size];
-	memcpy(temp, bufferMatrix + size * a, sizeof(double) * (size));
-	memcpy(bufferMatrix + size * a, bufferMatrix + size * b, sizeof(double) * (size));
-	memcpy(bufferMatrix + size * b, temp, sizeof(double) * (size));
-	delete[] temp;
-}
-
-__global__ void device_findRowWithMaxElem(double* bufferMatrix, int* size, int* coloumn, double* output) {
+__global__ void device_findRowWithMaxElem(double* bufferMatrix, int size, int coloumn, double* output) {
 
 	double maxEl = DBL_MIN;
-	double row_i = *coloumn;
+	double row_i = coloumn;
 
-	for (int i = *coloumn; i < *size; i++) {
+	for (int i = coloumn; i < size; i++) {
 
-		if (abs(bufferMatrix[i * *size + *coloumn]) > maxEl) {
+		if (abs(bufferMatrix[i * size + coloumn]) > maxEl) {
 			row_i = i;
-			maxEl = abs(bufferMatrix[i * *size + *coloumn]);
+			maxEl = abs(bufferMatrix[i * size + coloumn]);
 		}
 
 	}
@@ -92,6 +55,8 @@ __global__ void device_findRowWithMaxElem(double* bufferMatrix, int* size, int* 
 
 }
 
+double* stringkoefs;
+bool* device_flags;
 
 static class SqMatrixCalculator
 {
@@ -105,6 +70,7 @@ public:
 		CPU,
 		GPU
 	};
+
 
 	static MElement getDeterminator(Matrix matrix, int size, int type) {
 		bool sign = 1;
@@ -159,10 +125,13 @@ public:
 					GPUswapStrings(bufferMatrix, coloumn, maxElString, size);
 					if (sign != nullptr) *sign = !(*sign);
 				}
-				GPU_subMatrixTriangulation(bufferMatrix, coloumn, size);
+				initGPUTriangulationContext(size);
+				GPU_TriangulationStep(bufferMatrix, coloumn, size);
 			}
+			freeGPUTriangulationContext();
 
 			tMatrix = takeBuffer(bufferMatrix, size);
+			freeBuffer(bufferMatrix);
 
 		}
 
@@ -222,33 +191,39 @@ public:
 	}
 
 private:
+	
+	static void freeBuffer(double* matrix) {
+		cudaFree(matrix);
+	}
 
+	static void freeGPUTriangulationContext() {
+		cudaFree(stringkoefs);
+		cudaFree(device_flags);
+	}
+
+	static void initGPUTriangulationContext(int size) {
+		cudaMalloc((void**)&stringkoefs, (size + 1) * sizeof(double));
+		cudaMalloc((void**)&device_flags, (size + 1) * sizeof(bool));
+	}
 
 	static double GPUfindRowWithMaxElem(double* bufferMatrix, int size, int coloumn) {
-		int* dev_size, * dev_coloumn;
-		double* output;
-		cudaMalloc((void**)&dev_size, sizeof(int));
-		cudaMalloc((void**)&dev_coloumn, sizeof(int));
-		cudaMalloc((void**)&output, sizeof(double));
-		cudaMemcpy(dev_size, &size, sizeof(int), cudaMemcpyHostToDevice);
-		cudaMemcpy(dev_coloumn, &coloumn, sizeof(int), cudaMemcpyHostToDevice);
 
-		device_findRowWithMaxElem << <1, 1 >> > (bufferMatrix, dev_size, dev_coloumn, output);
+		double* output;
+		cudaMalloc((void**)&output, sizeof(double));;
+		device_findRowWithMaxElem << <1, 1 >> > (bufferMatrix, size, coloumn, output);
 		double host_output;
 		cudaMemcpy(&host_output, output, sizeof(double), cudaMemcpyDeviceToHost);
+		cudaFree(output);
 		return host_output;
 	}
 
 	static void GPUswapStrings(double* bufferMatrix, int a, int b, int size) {
-		int* dev_a, * dev_b, * dev_size;
-		cudaMalloc((void**)&dev_a, sizeof(int));
-		cudaMalloc((void**)&dev_b, sizeof(int));
-		cudaMalloc((void**)&dev_size, sizeof(int));
-		cudaMemcpy(dev_a, &a, sizeof(int), cudaMemcpyHostToDevice);
-		cudaMemcpy(dev_b, &b, sizeof(int), cudaMemcpyHostToDevice);
-		cudaMemcpy(dev_size, &size, sizeof(int), cudaMemcpyHostToDevice);
-
-		device_swap_strings <<<1, 1 >>> (bufferMatrix, a, b, size);
+		double* temp;
+		cudaMalloc((void**)&temp, sizeof(double) * size);
+		cudaMemcpy(temp, bufferMatrix + size * a, sizeof(double) * (size), cudaMemcpyDeviceToDevice);
+		cudaMemcpy(bufferMatrix + size * a, bufferMatrix + size * b, sizeof(double) * (size), cudaMemcpyDeviceToDevice);
+		cudaMemcpy(bufferMatrix + size * b, temp, sizeof(double) * (size), cudaMemcpyDeviceToDevice);
+		cudaFree(temp);
 
 	}
 
@@ -276,45 +251,20 @@ private:
 		for (int i = 0; i < size; i++) {
 			memcpy(matrix + i * size, m[i], sizeof(MElement) * size);
 		}
-		//std::cout << "\n\n" << *matrix << "\n\n";
 		cudaMalloc((void**)&(bufferMatrix), sizeof(MElement) * size * size);
 		cudaMemcpy(bufferMatrix, matrix, sizeof(MElement) * size * size, cudaMemcpyHostToDevice);
 		delete[] matrix;
 	}
 
-	static void GPU_subMatrixTriangulation(double* bufferMatrix, int startpos, int size) {
-		
-		double* stringkoefs;
-		cudaMalloc((void**)&stringkoefs, (size + 1) * sizeof(double));
-		bool* flags = (bool*)malloc(sizeof(bool) * (size+1));
-		bool* device_flags;
-		for (int i = 0; i < size + 1; i++) flags[i] = false;
-		cudaMalloc((void**)&device_flags, (size + 1) * sizeof(bool));
-		cudaMemcpy(device_flags, flags, sizeof(bool) * (size + 1), cudaMemcpyHostToDevice);
-	
-		device_subMatrixTriangulationStep <<<size, 1000>> > (bufferMatrix, stringkoefs, startpos, size, device_flags);
-		cudaFree(stringkoefs);
+	static void GPU_TriangulationStep(double* bufferMatrix, int startpos, int size) {
+
+		int preparingBlocksNumber = (size / 512) + 1;
+		device_prepare_flags<<<preparingBlocksNumber, 512 >>>(device_flags, size);
+		int blocksNumber = (size*size / 512) + 1;
+		device_subMatrixTriangulationStep <<<blocksNumber, 512>> > (bufferMatrix, stringkoefs, startpos, size, device_flags);
 
 	}
 
-	static void GPU_sumStrings(MRow& sum, MRow& summand, MElement k, int size) {
-
-		MRow dev_sum;
-		cudaMalloc((void**)&dev_sum, sizeof(MElement) * size);
-		cudaMemcpy(dev_sum, sum, sizeof(MElement) * size, cudaMemcpyHostToDevice);
-
-
-		MRow dev_summand;
-		cudaMalloc((void**)&dev_summand, sizeof(MElement) * size);
-		cudaMemcpy(dev_summand, summand, sizeof(MElement) * size, cudaMemcpyHostToDevice);
-
-
-		device_sumStrings << <1, size >> > (dev_sum, dev_summand, k);
-		cudaMemcpy(sum, dev_sum, sizeof(MElement) * size, cudaMemcpyDeviceToHost);
-
-		cudaFree(dev_sum);
-		cudaFree(dev_summand);
-	}
 
 
 };

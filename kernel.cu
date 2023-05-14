@@ -6,6 +6,7 @@
 #include "Matrix.h"
 #include <random>
 #include <fstream>
+#include <chrono>
 
 
 double fRand(double fMin, double fMax)
@@ -29,8 +30,8 @@ int main()
     srand(time(NULL));
 
   
-    std::ofstream CPU_file("CPU15.txt");
-    std::ofstream GPU_file("GPU15.txt");
+    std::ofstream CPU_file("CPU16.txt");
+    std::ofstream GPU_file("GPU16.txt");
 
     int N = 5000;
     double** matrix = new double* [N];
@@ -43,7 +44,7 @@ int main()
         }
     }
 
-        
+    /*
     for (int i = 0; i < 5; i++) {
         std::cout << std::endl;
         for (int j = 0; j < 5; j++) {
@@ -51,7 +52,8 @@ int main()
         }
     }
 
-   /* std::cout << "\n\n";
+
+    std::cout << "\n\n";
     double Tmtrx = SqMatrixCalculator::getDeterminator(matrix, 500, SqMatrixCalculator::GPU);
 
     std::cout << "\n\n";
@@ -61,25 +63,29 @@ int main()
 
     std::cout << CLOCKS_PER_SEC;
     */
-    for (int matrixSize = 50; matrixSize < N; matrixSize+=50) {
-        clock_t start_CPU_determination = clock();
+    
+    
+    for (int matrixSize = 2650; matrixSize < N; matrixSize+=10) {
+        auto begin_CPU = std::chrono::steady_clock::now();
         double determinator = SqMatrixCalculator::getDeterminator(matrix, matrixSize, SqMatrixCalculator::CPU);
-        clock_t end_CPU_determination = clock();
+        auto end_CPU = std::chrono::steady_clock::now();
+        auto elapsed_ms_CPU = std::chrono::duration_cast<std::chrono::milliseconds>(end_CPU - begin_CPU);
 
-        clock_t start_GPU_determination = clock();
+        auto begin_GPU = std::chrono::steady_clock::now();
         double determinator2 = SqMatrixCalculator::getDeterminator(matrix, matrixSize, SqMatrixCalculator::GPU);
-        clock_t end_GPU_determination = clock();
+        auto end_GPU = std::chrono::steady_clock::now();
+        auto elapsed_ms_GPU = std::chrono::duration_cast<std::chrono::milliseconds>(end_GPU - begin_GPU);
 
-        CPU_file << matrixSize << " " << end_CPU_determination - start_CPU_determination << std::endl;
-        GPU_file << matrixSize << " " << end_GPU_determination - start_GPU_determination << std::endl;
+        CPU_file << matrixSize << " " << elapsed_ms_CPU.count() << std::endl;
+        GPU_file << matrixSize << " " << elapsed_ms_GPU.count() << std::endl;
 
     }
-
-    /*
+    
+    
     
 
 
-    */
+    
 
 }
 
